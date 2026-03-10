@@ -1,47 +1,77 @@
 // ============================================================
-// STRUDEL BUILDER - Application State & Logic
+// STRUDEL BUILDER - Canvas Piano Roll Edition
 // ============================================================
 
 const TRACK_TYPES = {
   drums: {
     label: 'Drums',
-    color: 'var(--accent-drums)',
-    glow: 'var(--glow-drums)',
-    sounds: ['bd', 'sd', 'hh', 'oh', 'cp', 'rim', 'cr', 'cb'],
+    color: '#ff6b4a',
+    colorDim: '#ff6b4a88',
+    glow: '#ff6b4a33',
+    rows: ['bd', 'sd', 'hh', 'lt', 'cp', 'rim', 'cr', 'cb'],
     defaultSound: 'bd',
-    mode: 'steps', // step sequencer
-    defaultSteps: [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0]
+    defaultEvents: [
+      { row: 0, start: 0, duration: 1/16 },
+      { row: 0, start: 4/16, duration: 1/16 },
+      { row: 0, start: 8/16, duration: 1/16 },
+      { row: 0, start: 12/16, duration: 1/16 },
+    ]
   },
   bass: {
     label: 'Bass',
-    color: 'var(--accent-bass)',
-    glow: 'var(--glow-bass)',
+    color: '#4aadff',
+    colorDim: '#4aadff88',
+    glow: '#4aadff33',
+    rows: ['7','6','5','4','3','2','1','0'],
     sounds: ['sawtooth', 'square', 'triangle', 'sine'],
     defaultSound: 'sawtooth',
-    mode: 'notes', // piano roll
-    defaultNotes: [0, -1, 2, -1, 0, -1, 4, -1, 0, -1, 2, -1, 5, -1, 4, -1]
+    defaultEvents: [
+      { row: 7, start: 0, duration: 1/16 },
+      { row: 5, start: 2/16, duration: 1/16 },
+      { row: 7, start: 4/16, duration: 1/16 },
+      { row: 3, start: 6/16, duration: 1/16 },
+      { row: 7, start: 8/16, duration: 1/16 },
+      { row: 5, start: 10/16, duration: 1/16 },
+      { row: 2, start: 12/16, duration: 1/16 },
+      { row: 3, start: 14/16, duration: 1/16 },
+    ]
   },
   melody: {
     label: 'Melody',
-    color: 'var(--accent-melody)',
-    glow: 'var(--glow-melody)',
+    color: '#b44aff',
+    colorDim: '#b44aff88',
+    glow: '#b44aff33',
+    rows: ['7','6','5','4','3','2','1','0'],
     sounds: ['triangle', 'sine', 'square', 'sawtooth'],
     defaultSound: 'triangle',
-    mode: 'notes',
-    defaultNotes: [4, -1, 5, 7, -1, 4, -1, 2, 0, -1, -1, 2, 4, -1, 5, -1]
+    defaultEvents: [
+      { row: 3, start: 0, duration: 1/16 },
+      { row: 2, start: 2/16, duration: 1/16 },
+      { row: 0, start: 3/16, duration: 1/16 },
+      { row: 3, start: 5/16, duration: 1/16 },
+      { row: 5, start: 7/16, duration: 1/16 },
+      { row: 7, start: 8/16, duration: 1/16 },
+      { row: 5, start: 11/16, duration: 1/16 },
+      { row: 3, start: 12/16, duration: 1/16 },
+      { row: 2, start: 14/16, duration: 1/16 },
+    ]
   },
   chords: {
     label: 'Chords',
-    color: 'var(--accent-chords)',
-    glow: 'var(--glow-chords)',
+    color: '#4affb4',
+    colorDim: '#4affb488',
+    glow: '#4affb433',
+    rows: ['G','F','Em','E','Dm','D','C','Bm','Bb','Am','A','Ab'],
     sounds: ['sine', 'triangle', 'sawtooth', 'square'],
     defaultSound: 'sine',
-    mode: 'chords',
-    defaultChords: ['Am', '~', 'F', '~', 'C', '~', 'G', '~', 'Am', '~', 'F', '~', 'C', '~', 'G', '~']
+    defaultEvents: [
+      { row: 10, start: 0, duration: 4/16 },
+      { row: 6, start: 4/16, duration: 4/16 },
+      { row: 6, start: 8/16, duration: 4/16 },  // C
+      { row: 0, start: 12/16, duration: 4/16 },  // G
+    ]
   }
 };
-
-const AVAILABLE_CHORDS = ['Am','C','Dm','Em','F','G','Bdim','A','Bm','D','E','Fm','Gm','Bb','Cm','Eb','~'];
 
 const TRANSFORMS = [
   { id: 'rev', label: 'rev', desc: 'Reverse' },
@@ -64,6 +94,7 @@ let state = {
 };
 
 let trackIdCounter = 0;
+const canvasInstances = {}; // trackId -> CanvasPianoRoll
 
 // ============================================================
 // STRUDEL ENGINE
@@ -71,14 +102,10 @@ let trackIdCounter = 0;
 
 let strudelInitialized = false;
 
-// Call initStrudel at top level with prebake for samples
 const strudelReady = (async () => {
   try {
     await initStrudel({
-      prebake: () => {
-        // Load the default sample library (drum machines, instruments)
-        return samples('github:tidalcycles/dirt-samples');
-      }
+      prebake: () => samples('github:tidalcycles/dirt-samples')
     });
     strudelInitialized = true;
     state.strudelReady = true;
@@ -96,61 +123,110 @@ const strudelReady = (async () => {
   }
 })();
 
-function generateDisplayCode() {
-  if (state.tracks.length === 0) return '// Add tracks to start making music!';
+// ============================================================
+// EVENTS -> MINI NOTATION
+// ============================================================
 
-  const trackCodes = buildTrackCodes();
-  if (trackCodes.length === 0) return '// All tracks are muted';
+function eventsToMiniNotation(events, _trackType, rows, gridRes = 32) {
+  if (events.length === 0) return '~';
+  const step = 1 / gridRes;
+  const slots = new Array(gridRes).fill(null);
 
-  const cps = (state.bpm / 60 / 4).toFixed(3);
-
-  if (trackCodes.length === 1) {
-    return trackCodes[0] + `.cps(${cps})`;
-  } else {
-    const lines = [];
-    lines.push('stack(');
-    trackCodes.forEach((c, i) => {
-      lines.push('  ' + c + (i < trackCodes.length - 1 ? ',' : ''));
-    });
-    lines.push(`)` + `.cps(${cps})`);
-    return lines.join('\n');
+  for (const ev of events) {
+    const startSlot = Math.round(ev.start / step);
+    const durSlots = Math.max(1, Math.round(ev.duration / step));
+    if (startSlot >= 0 && startSlot < gridRes) {
+      const rowLabel = rows[ev.row];
+      slots[startSlot] = { label: rowLabel, span: durSlots };
+    }
   }
+
+  const parts = [];
+  let i = 0;
+  while (i < gridRes) {
+    if (slots[i] !== null) {
+      const { label, span } = slots[i];
+      parts.push(span > 1 ? `${label}@${span}` : label);
+      i += span;
+    } else {
+      let restCount = 0;
+      while (i < gridRes && slots[i] === null) { restCount++; i++; }
+      parts.push(restCount > 1 ? `~@${restCount}` : '~');
+    }
+  }
+  return parts.join(' ');
 }
 
-function buildTrackCodes() {
+function drumsEventsToMiniNotation(events, rows, gridRes = 32) {
+  if (events.length === 0) return '~';
+  const step = 1 / gridRes;
+  const slots = new Array(gridRes).fill(null);
+
+  for (const ev of events) {
+    const startSlot = Math.round(ev.start / step);
+    if (startSlot >= 0 && startSlot < gridRes) {
+      // For drums, multiple sounds can stack at the same slot
+      if (slots[startSlot] === null) slots[startSlot] = [];
+      slots[startSlot].push(rows[ev.row]);
+    }
+  }
+
+  const parts = [];
+  let i = 0;
+  while (i < gridRes) {
+    if (slots[i] !== null) {
+      const sounds = slots[i];
+      if (sounds.length === 1) {
+        parts.push(sounds[0]);
+      } else {
+        parts.push(`[${sounds.join(',')}]`);
+      }
+      i++;
+    } else {
+      let restCount = 0;
+      while (i < gridRes && slots[i] === null) { restCount++; i++; }
+      parts.push(restCount > 1 ? `~@${restCount}` : '~');
+    }
+  }
+  return parts.join(' ');
+}
+
+// ============================================================
+// CODE GENERATION
+// ============================================================
+
+function buildTrackCodes(forEval = false) {
   const trackCodes = [];
+  const q = (str) => forEval ? `mini("${str}")` : `"${str}"`;
 
   for (const track of state.tracks) {
     if (track.muted) continue;
     let code = '';
+    const typeInfo = TRACK_TYPES[track.type];
 
     if (track.type === 'drums') {
-      const pattern = track.steps.map(s => s ? track.sound : '~').join(' ');
-      code = `s("${pattern}")`;
+      const pattern = drumsEventsToMiniNotation(track.events, typeInfo.rows);
+      code = `s(${q(pattern)})`;
     } else if (track.type === 'chords') {
-      const chordPattern = track.chords.filter(c => c).join(' ');
-      code = `note("<${chordPattern}>".voicings("lefthand"))`;
+      const pattern = eventsToMiniNotation(track.events, track.type, typeInfo.rows);
+      code = `chord(${q('<' + pattern + '>')}).voicing()`;
       code += `.s("${track.sound}")`;
-      code += `.slow(4)`;
+      code += `.fast(4)`;
     } else {
-      const notePattern = track.notes.map(n => n === -1 ? '~' : n).join(' ');
-      code = `n("${notePattern}")`;
+      const pattern = eventsToMiniNotation(track.events, track.type, typeInfo.rows);
+      code = `n(${q(pattern)})`;
       code += `.scale("${state.scale}")`;
       code += `.s("${track.sound}")`;
       if (track.type === 'bass') code += `.slow(2)`;
     }
 
-    // Effects
-    if (track.gain !== undefined && track.gain !== 0.8) {
-      code += `.gain(${track.gain.toFixed(2)})`;
-    }
+    if (track.gain !== undefined && track.gain !== 0.8) code += `.gain(${track.gain.toFixed(2)})`;
     if (track.lpf && track.lpf < 20000) code += `.lpf(${track.lpf})`;
     if (track.hpf && track.hpf > 20) code += `.hpf(${track.hpf})`;
     if (track.delay && track.delay > 0) code += `.delay(${track.delay.toFixed(2)})`;
     if (track.room && track.room > 0) code += `.room(${track.room.toFixed(2)})`;
     if (track.pan !== undefined && track.pan !== 0.5) code += `.pan(${track.pan.toFixed(2)})`;
 
-    // Transforms
     for (const t of (track.transforms || [])) {
       const transform = TRANSFORMS.find(tr => tr.id === t);
       if (transform) code += `.${transform.label}`;
@@ -158,31 +234,43 @@ function buildTrackCodes() {
 
     trackCodes.push(code);
   }
-
   return trackCodes;
 }
 
+function generateDisplayCode() {
+  if (state.tracks.length === 0) return '// Add tracks to start making music!';
+  const trackCodes = buildTrackCodes();
+  if (trackCodes.length === 0) return '// All tracks are muted';
+  const cps = (state.bpm / 60 / 4).toFixed(3);
+
+  if (trackCodes.length === 1) {
+    return trackCodes[0] + `.cps(${cps})`;
+  }
+  const lines = ['stack('];
+  trackCodes.forEach((c, i) => {
+    lines.push('  ' + c + (i < trackCodes.length - 1 ? ',' : ''));
+  });
+  lines.push(`).cps(${cps})`);
+  return lines.join('\n');
+}
+
+// ============================================================
+// PLAYBACK
+// ============================================================
+
 async function playCode() {
-  // Make sure engine is ready
   if (!strudelInitialized) {
-    console.log('Waiting for Strudel engine...');
     await strudelReady;
-    if (!strudelInitialized) {
-      console.error('Engine failed to initialize');
-      return;
-    }
+    if (!strudelInitialized) return;
   }
 
-  const trackCodes = buildTrackCodes();
+  const trackCodes = buildTrackCodes(true);
   if (trackCodes.length === 0) {
-    // No active tracks - stop playback
     try { hush(); } catch(e) {}
     return;
   }
 
   const cps = (state.bpm / 60 / 4).toFixed(3);
-
-  // Build the pattern expression
   let patternExpr;
   if (trackCodes.length === 1) {
     patternExpr = trackCodes[0];
@@ -190,23 +278,464 @@ async function playCode() {
     patternExpr = `stack(\n${trackCodes.map(c => '  ' + c).join(',\n')}\n)`;
   }
 
-  // Use the global evaluate() for hot-swapping: replaces the pattern seamlessly
-  // without stopping the scheduler, so the music keeps flowing.
-  // evaluate() is exported by @strudel/web and internally calls repl.evaluate()
   try {
-    const code = patternExpr + `.cps(${cps})`;
-    await evaluate(code);
-    console.log('Pattern updated (hot-swap)');
+    const pattern = (0, eval)(patternExpr + `.cps(${cps})`);
+    pattern.play();
   } catch(e) {
     console.error('Play error:', e);
   }
 }
 
 function stopCode() {
-  try {
-    hush();
-  } catch(e) {
-    console.warn('Stop error:', e);
+  try { hush(); } catch(e) {}
+}
+
+// ============================================================
+// CANVAS PIANO ROLL
+// ============================================================
+
+class CanvasPianoRoll {
+  constructor(canvas, track) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.track = track;
+    this.typeInfo = TRACK_TYPES[track.type];
+
+    // View
+    this.zoom = 1.0;
+    this.scrollX = 0;
+    this.gridRes = 16;
+
+    // Layout
+    this.labelWidth = 40;
+    this.rowHeight = track.type === 'drums' ? 28 : 24;
+    this.rows = this.typeInfo.rows;
+    this.numRows = this.rows.length;
+
+    // Interaction
+    this.dragging = null;
+    this.hoverInfo = null;
+
+    // Chord picker
+    this.chordPicker = null;
+
+    this._resize();
+    this._bindEvents();
+    this.draw();
+  }
+
+  _resize() {
+    const rect = this.canvas.parentElement.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const w = rect.width;
+    const h = this.numRows * this.rowHeight;
+    this.canvas.width = w * dpr;
+    this.canvas.height = h * dpr;
+    this.canvas.style.width = w + 'px';
+    this.canvas.style.height = h + 'px';
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.width = w;
+    this.height = h;
+  }
+
+  get gridWidth() { return this.width - this.labelWidth; }
+  get visibleDuration() { return 1.0 / this.zoom; }
+
+  timeToX(t) {
+    return this.labelWidth + ((t - this.scrollX) / this.visibleDuration) * this.gridWidth;
+  }
+  xToTime(x) {
+    return this.scrollX + ((x - this.labelWidth) / this.gridWidth) * this.visibleDuration;
+  }
+  yToRow(y) {
+    return Math.floor(y / this.rowHeight);
+  }
+  snap(t) {
+    const step = 1.0 / (this.gridRes * this.zoom);
+    // Snap to the visible grid resolution, scaled by zoom
+    const actualStep = 1.0 / this.gridRes;
+    return Math.round(t / actualStep) * actualStep;
+  }
+
+  // Hit test: find event at (x, y), return { index, edge: null|'left'|'right' }
+  hitTest(x, y) {
+    const t = this.xToTime(x);
+    const row = this.yToRow(y);
+    const edgeThresh = 6; // pixels
+
+    for (let i = 0; i < this.track.events.length; i++) {
+      const ev = this.track.events[i];
+      if (ev.row !== row) continue;
+      const ex1 = this.timeToX(ev.start);
+      const ex2 = this.timeToX(ev.start + ev.duration);
+      if (x >= ex1 - 2 && x <= ex2 + 2) {
+        let edge = null;
+        if (Math.abs(x - ex1) < edgeThresh) edge = 'left';
+        else if (Math.abs(x - ex2) < edgeThresh) edge = 'right';
+        return { index: i, edge };
+      }
+    }
+    return null;
+  }
+
+  _overlaps(start, duration, row, excludeIndex = -1) {
+    const end = start + duration;
+    for (let i = 0; i < this.track.events.length; i++) {
+      if (i === excludeIndex) continue;
+      const ev = this.track.events[i];
+      if (ev.row !== row) continue;
+      if (start < ev.start + ev.duration && end > ev.start) return true;
+    }
+    return false;
+  }
+
+  _bindEvents() {
+    this.canvas.addEventListener('mousedown', (e) => this._onMouseDown(e));
+    this.canvas.addEventListener('mousemove', (e) => this._onMouseMove(e));
+    this.canvas.addEventListener('mouseup', (e) => this._onMouseUp(e));
+    this.canvas.addEventListener('mouseleave', () => this._onMouseLeave());
+    this.canvas.addEventListener('contextmenu', (e) => { e.preventDefault(); });
+    this.canvas.addEventListener('wheel', (e) => this._onWheel(e), { passive: false });
+    this.canvas.addEventListener('dblclick', (e) => this._onDblClick(e));
+  }
+
+  _getPos(e) {
+    const rect = this.canvas.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+
+  _onMouseDown(e) {
+    if (this.chordPicker) { this._closeChordPicker(); return; }
+    const { x, y } = this._getPos(e);
+    if (x < this.labelWidth) return;
+
+    const hit = this.hitTest(x, y);
+
+    if (e.button === 2) {
+      // Right click: delete
+      if (hit) {
+        this.track.events.splice(hit.index, 1);
+        this._onChange();
+      }
+      return;
+    }
+
+    if (hit) {
+      if (hit.edge === 'left') {
+        this.dragging = { type: 'resize-left', index: hit.index, origStart: this.track.events[hit.index].start, origDur: this.track.events[hit.index].duration };
+      } else if (hit.edge === 'right') {
+        this.dragging = { type: 'resize-right', index: hit.index, origStart: this.track.events[hit.index].start, origDur: this.track.events[hit.index].duration };
+      } else {
+        const ev = this.track.events[hit.index];
+        this.dragging = { type: 'move', index: hit.index, offsetT: this.xToTime(x) - ev.start, origRow: ev.row };
+      }
+    } else {
+      // Create new event
+      const row = this.yToRow(y);
+      if (row < 0 || row >= this.numRows) return;
+      const t = this.snap(this.xToTime(x));
+      const dur = 1 / this.gridRes;
+      if (t >= 0 && t < 1 && !this._overlaps(t, dur, row)) {
+        const newEv = { row, start: t, duration: dur };
+        this.track.events.push(newEv);
+        const idx = this.track.events.length - 1;
+        this.dragging = { type: 'draw', index: idx, anchorTime: t };
+        this._onChange();
+      }
+    }
+  }
+
+  _onMouseMove(e) {
+    const { x, y } = this._getPos(e);
+
+    if (this.dragging) {
+      const ev = this.track.events[this.dragging.index];
+      if (!ev) { this.dragging = null; return; }
+      const t = this.snap(this.xToTime(x));
+
+      if (this.dragging.type === 'draw') {
+        const anchor = this.dragging.anchorTime;
+        const newStart = Math.max(0, Math.min(anchor, t));
+        const newEnd = Math.min(1, Math.max(anchor + 1/this.gridRes, t + 1/this.gridRes));
+        if (!this._overlaps(newStart, newEnd - newStart, ev.row, this.dragging.index)) {
+          ev.start = newStart;
+          ev.duration = newEnd - newStart;
+        }
+      } else if (this.dragging.type === 'resize-right') {
+        const minDur = 1 / this.gridRes;
+        const newEnd = Math.min(1, Math.max(ev.start + minDur, this.snap(this.xToTime(x))));
+        const newDur = newEnd - ev.start;
+        if (!this._overlaps(ev.start, newDur, ev.row, this.dragging.index)) {
+          ev.duration = newDur;
+        }
+      } else if (this.dragging.type === 'resize-left') {
+        const minDur = 1 / this.gridRes;
+        const origEnd = this.dragging.origStart + this.dragging.origDur;
+        const newStart = Math.max(0, Math.min(origEnd - minDur, this.snap(this.xToTime(x))));
+        const newDur = origEnd - newStart;
+        if (!this._overlaps(newStart, newDur, ev.row, this.dragging.index)) {
+          ev.start = newStart;
+          ev.duration = newDur;
+        }
+      } else if (this.dragging.type === 'move') {
+        const newT = this.snap(Math.max(0, Math.min(1 - ev.duration, this.xToTime(x) - this.dragging.offsetT)));
+        const newRow = Math.max(0, Math.min(this.numRows - 1, this.yToRow(y)));
+        if (!this._overlaps(newT, ev.duration, newRow, this.dragging.index)) {
+          ev.start = newT;
+          ev.row = newRow;
+        }
+      }
+      this.draw();
+      return;
+    }
+
+    // Hover cursor
+    if (x < this.labelWidth) {
+      this.canvas.style.cursor = 'default';
+      this.hoverInfo = null;
+      this.draw();
+      return;
+    }
+    const hit = this.hitTest(x, y);
+    if (hit) {
+      if (hit.edge) this.canvas.style.cursor = 'col-resize';
+      else this.canvas.style.cursor = 'grab';
+      this.hoverInfo = hit;
+    } else {
+      this.canvas.style.cursor = 'crosshair';
+      this.hoverInfo = { row: this.yToRow(y), time: this.snap(this.xToTime(x)) };
+    }
+    this.draw();
+  }
+
+  _onMouseUp() {
+    if (this.dragging) {
+      this.dragging = null;
+      this._onChange();
+    }
+  }
+
+  _onMouseLeave() {
+    this.hoverInfo = null;
+    this.dragging = null;
+    this.draw();
+  }
+
+  _onDblClick(e) {
+    const { x, y } = this._getPos(e);
+    const hit = this.hitTest(x, y);
+    if (hit && this.track.type === 'chords') {
+      this._openChordPicker(hit.index, e.clientX, e.clientY);
+    } else if (hit) {
+      this.track.events.splice(hit.index, 1);
+      this._onChange();
+    }
+  }
+
+  _onWheel(e) {
+    e.preventDefault();
+    const { x } = this._getPos(e);
+    const tAtCursor = this.xToTime(x);
+
+    if (e.ctrlKey || !e.shiftKey) {
+      // Zoom
+      const factor = e.deltaY > 0 ? 0.9 : 1.1;
+      const newZoom = Math.max(1, Math.min(16, this.zoom * factor));
+      this.zoom = newZoom;
+      // Keep cursor position stable
+      this.scrollX = tAtCursor - ((x - this.labelWidth) / this.gridWidth) * this.visibleDuration;
+    } else {
+      // Scroll
+      this.scrollX += e.deltaY * 0.001;
+    }
+    this.scrollX = Math.max(0, Math.min(1 - this.visibleDuration, this.scrollX));
+    this.draw();
+  }
+
+  _openChordPicker(eventIndex, clientX, clientY) {
+    this._closeChordPicker();
+    const ev = this.track.events[eventIndex];
+    const picker = document.createElement('div');
+    picker.className = 'chord-picker';
+    picker.style.left = clientX + 'px';
+    picker.style.top = clientY + 'px';
+    for (const chord of this.rows) {
+      const chip = document.createElement('div');
+      chip.className = 'chord-picker-item' + (chord === this.rows[ev.row] ? ' active' : '');
+      chip.textContent = chord;
+      chip.addEventListener('click', () => {
+        ev.row = this.rows.indexOf(chord);
+        this._closeChordPicker();
+        this._onChange();
+      });
+      picker.appendChild(chip);
+    }
+    document.body.appendChild(picker);
+    this.chordPicker = picker;
+  }
+
+  _closeChordPicker() {
+    if (this.chordPicker) {
+      this.chordPicker.remove();
+      this.chordPicker = null;
+    }
+  }
+
+  _onChange() {
+    updateCode();
+    if (state.playing) playCode();
+    this.draw();
+  }
+
+  draw() {
+    const ctx = this.ctx;
+    const w = this.width;
+    const h = this.height;
+    ctx.clearRect(0, 0, w, h);
+
+    // Background
+    ctx.fillStyle = '#12121a';
+    ctx.fillRect(0, 0, w, h);
+
+    // Row backgrounds (alternating)
+    for (let r = 0; r < this.numRows; r++) {
+      const y = r * this.rowHeight;
+      ctx.fillStyle = r % 2 === 0 ? '#15151f' : '#12121a';
+      ctx.fillRect(this.labelWidth, y, this.gridWidth, this.rowHeight);
+    }
+
+    // Row labels
+    ctx.fillStyle = '#555568';
+    ctx.font = '11px "JetBrains Mono", monospace';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    for (let r = 0; r < this.numRows; r++) {
+      const y = r * this.rowHeight + this.rowHeight / 2;
+      ctx.fillText(this.rows[r], this.labelWidth - 6, y);
+    }
+
+    // Grid lines (vertical)
+    const stepSize = 1 / this.gridRes;
+    ctx.strokeStyle = '#1e1e2e';
+    ctx.lineWidth = 0.5;
+    for (let i = 0; i <= this.gridRes; i++) {
+      const t = i * stepSize;
+      if (t < this.scrollX - stepSize || t > this.scrollX + this.visibleDuration + stepSize) continue;
+      const x = this.timeToX(t);
+      if (x < this.labelWidth || x > w) continue;
+      // Beat markers
+      if (i % (this.gridRes / 4) === 0) {
+        ctx.strokeStyle = '#2e2e44';
+        ctx.lineWidth = 1.5;
+      } else {
+        ctx.strokeStyle = '#1e1e2e';
+        ctx.lineWidth = 0.5;
+      }
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, h);
+      ctx.stroke();
+    }
+
+    // Row dividers
+    ctx.strokeStyle = '#1e1e2e';
+    ctx.lineWidth = 0.5;
+    for (let r = 0; r <= this.numRows; r++) {
+      const y = r * this.rowHeight;
+      ctx.beginPath();
+      ctx.moveTo(this.labelWidth, y);
+      ctx.lineTo(w, y);
+      ctx.stroke();
+    }
+
+    // Events
+    for (let i = 0; i < this.track.events.length; i++) {
+      const ev = this.track.events[i];
+      const x1 = this.timeToX(ev.start);
+      const x2 = this.timeToX(ev.start + ev.duration);
+      const y = ev.row * this.rowHeight + 2;
+      const ew = Math.max(4, x2 - x1 - 1);
+      const eh = this.rowHeight - 4;
+
+      if (x1 > w || x2 < this.labelWidth) continue;
+
+      // Glow
+      ctx.shadowColor = this.typeInfo.glow;
+      ctx.shadowBlur = 8;
+
+      // Fill
+      const isHovered = this.hoverInfo && this.hoverInfo.index === i;
+      ctx.fillStyle = isHovered ? this.typeInfo.color : this.typeInfo.colorDim;
+      ctx.beginPath();
+      const rad = 3;
+      ctx.roundRect(x1, y, ew, eh, rad);
+      ctx.fill();
+
+      ctx.shadowBlur = 0;
+
+      // Border
+      ctx.strokeStyle = this.typeInfo.color;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // Label inside event (for chords or long enough notes)
+      if (ew > 20) {
+        ctx.fillStyle = '#000';
+        ctx.font = 'bold 10px "JetBrains Mono", monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(this.rows[ev.row], x1 + ew / 2, y + eh / 2);
+      }
+    }
+
+    // Hover ghost (when not hovering an existing event)
+    if (this.hoverInfo && this.hoverInfo.index === undefined && !this.dragging) {
+      if (this.hoverInfo.row >= 0 && this.hoverInfo.row < this.numRows && this.hoverInfo.time >= 0 && this.hoverInfo.time < 1) {
+        const gx = this.timeToX(this.hoverInfo.time);
+        const gy = this.hoverInfo.row * this.rowHeight + 2;
+        const gw = Math.max(4, this.timeToX(this.hoverInfo.time + 1/this.gridRes) - gx - 1);
+        ctx.fillStyle = this.typeInfo.color + '33';
+        ctx.beginPath();
+        ctx.roundRect(gx, gy, gw, this.rowHeight - 4, 3);
+        ctx.fill();
+      }
+    }
+
+    // Label area separator
+    ctx.fillStyle = '#1a1a26';
+    ctx.fillRect(0, 0, this.labelWidth, h);
+    // Redraw labels on top
+    ctx.fillStyle = '#555568';
+    ctx.font = '11px "JetBrains Mono", monospace';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    for (let r = 0; r < this.numRows; r++) {
+      const y = r * this.rowHeight + this.rowHeight / 2;
+      ctx.fillText(this.rows[r], this.labelWidth - 6, y);
+    }
+
+    // Zoom indicator
+    if (this.zoom > 1) {
+      ctx.fillStyle = '#555568';
+      ctx.font = '10px "Outfit", sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillText(`${this.zoom.toFixed(1)}x`, this.labelWidth + 4, 4);
+
+      // Scrollbar
+      const barY = h - 4;
+      const barW = this.gridWidth;
+      ctx.fillStyle = '#1e1e2e';
+      ctx.fillRect(this.labelWidth, barY, barW, 3);
+      const thumbW = barW * this.visibleDuration;
+      const thumbX = this.labelWidth + (this.scrollX / (1 - this.visibleDuration + 0.001)) * (barW - thumbW);
+      ctx.fillStyle = '#4a4a6a';
+      ctx.fillRect(thumbX, barY, thumbW, 3);
+    }
+  }
+
+  destroy() {
+    this._closeChordPicker();
   }
 }
 
@@ -214,7 +743,7 @@ function stopCode() {
 // TRACK MANAGEMENT
 // ============================================================
 
-function createTrack(type, preset = null) {
+function createTrack(type, eventsPreset = null) {
   const typeInfo = TRACK_TYPES[type];
   const id = ++trackIdCounter;
   const track = {
@@ -230,15 +759,8 @@ function createTrack(type, preset = null) {
     room: 0,
     pan: 0.5,
     transforms: [],
+    events: eventsPreset ? eventsPreset.map(e => ({...e})) : typeInfo.defaultEvents.map(e => ({...e})),
   };
-
-  if (type === 'drums') {
-    track.steps = preset ? [...preset] : [...typeInfo.defaultSteps];
-  } else if (type === 'chords') {
-    track.chords = preset ? [...preset] : [...typeInfo.defaultChords];
-  } else {
-    track.notes = preset ? [...preset] : [...typeInfo.defaultNotes];
-  }
 
   state.tracks.push(track);
   state.activeTrack = id;
@@ -247,7 +769,52 @@ function createTrack(type, preset = null) {
   return track;
 }
 
+// Convert legacy 16-step array to events
+function stepsToEvents(steps, sound) {
+  const events = [];
+  const rows = TRACK_TYPES.drums.rows;
+  const rowIdx = rows.indexOf(sound || 'bd');
+  for (let i = 0; i < steps.length; i++) {
+    if (steps[i]) {
+      events.push({ row: rowIdx >= 0 ? rowIdx : 0, start: i/16, duration: 1/16 });
+    }
+  }
+  return events;
+}
+
+function notesToEvents(notes, type) {
+  const events = [];
+  const rows = TRACK_TYPES[type].rows;
+  for (let i = 0; i < notes.length; i++) {
+    if (notes[i] !== -1) {
+      const rowIdx = rows.indexOf(String(notes[i]));
+      events.push({ row: rowIdx >= 0 ? rowIdx : 0, start: i/16, duration: 1/16 });
+    }
+  }
+  return events;
+}
+
+function chordsToEvents(chords) {
+  const events = [];
+  const rows = TRACK_TYPES.chords.rows;
+  let i = 0;
+  while (i < chords.length) {
+    if (chords[i] !== '~') {
+      const chord = chords[i];
+      const rowIdx = rows.indexOf(chord);
+      let dur = 1;
+      while (i + dur < chords.length && chords[i + dur] === '~') dur++;
+      events.push({ row: rowIdx >= 0 ? rowIdx : 0, start: i/16, duration: dur/16 });
+      i += dur;
+    } else {
+      i++;
+    }
+  }
+  return events;
+}
+
 function removeTrack(id) {
+  if (canvasInstances[id]) { canvasInstances[id].destroy(); delete canvasInstances[id]; }
   state.tracks = state.tracks.filter(t => t.id !== id);
   if (state.activeTrack === id) state.activeTrack = state.tracks.length > 0 ? state.tracks[0].id : null;
   renderTracks();
@@ -271,8 +838,15 @@ function toggleMute(id) {
 function renderTracks() {
   const panel = document.getElementById('tracksPanel');
   const addBtn = document.getElementById('addTrackBtn');
-  // Remove all track cards
   panel.querySelectorAll('.track-card').forEach(el => el.remove());
+
+  // Clean up old canvas instances
+  for (const id of Object.keys(canvasInstances)) {
+    if (!state.tracks.find(t => t.id === parseInt(id))) {
+      canvasInstances[id].destroy();
+      delete canvasInstances[id];
+    }
+  }
 
   for (const track of state.tracks) {
     const typeInfo = TRACK_TYPES[track.type];
@@ -284,62 +858,31 @@ function renderTracks() {
 
     let bodyHTML = '';
 
-    // Sound selector
-    bodyHTML += `<div class="section-label">Sound</div>`;
-    bodyHTML += `<div class="sound-selector">`;
-    for (const snd of typeInfo.sounds) {
-      bodyHTML += `<div class="sound-chip ${track.sound === snd ? 'selected' : ''}"
-        style="${track.sound === snd ? `background:${typeInfo.color};border-color:${typeInfo.color}` : ''}"
-        data-sound="${snd}" data-track="${track.id}">${snd}</div>`;
+    // Sound selector (not for drums - drums use rows)
+    if (track.type !== 'drums') {
+      bodyHTML += `<div class="section-label">Sound</div>`;
+      bodyHTML += `<div class="sound-selector">`;
+      for (const snd of typeInfo.sounds || []) {
+        bodyHTML += `<div class="sound-chip ${track.sound === snd ? 'selected' : ''}"
+          style="${track.sound === snd ? `background:${typeInfo.color};border-color:${typeInfo.color}` : ''}"
+          data-sound="${snd}" data-track="${track.id}">${snd}</div>`;
+      }
+      bodyHTML += `</div>`;
+    }
+
+    // Canvas container
+    const gridLabel = track.type === 'drums' ? 'Drum Pattern' : track.type === 'chords' ? 'Chord Sequence' : 'Notes (scale degrees)';
+    bodyHTML += `<div class="section-label">${gridLabel} <span class="canvas-hint">click: draw | drag edges: resize | drag: move | right-click: delete | scroll: zoom</span></div>`;
+    bodyHTML += `<div class="canvas-container" id="canvas-wrap-${track.id}"><canvas id="canvas-${track.id}"></canvas></div>`;
+
+    // Grid resolution selector
+    bodyHTML += `<div class="grid-res-row">`;
+    bodyHTML += `<span class="section-label" style="margin:0">Grid</span>`;
+    for (const res of [4, 8, 16, 32]) {
+      const active = (canvasInstances[track.id]?.gridRes || 16) === res;
+      bodyHTML += `<div class="grid-res-chip ${active ? 'active' : ''}" data-res="${res}" data-track="${track.id}">1/${res}</div>`;
     }
     bodyHTML += `</div>`;
-
-    // Pattern editor
-    if (track.type === 'drums') {
-      bodyHTML += `<div class="section-label">Pattern (16 steps)</div>`;
-      bodyHTML += `<div class="step-grid">`;
-      for (let i = 0; i < 16; i++) {
-        const on = track.steps[i];
-        const beatMarker = i % 4 === 0 ? 'beat-marker' : '';
-        bodyHTML += `<div class="step-cell ${on ? 'on' : ''} ${beatMarker}"
-          style="${on ? `background:${typeInfo.color};box-shadow:0 0 8px ${typeInfo.glow}` : ''}"
-          data-step="${i}" data-track="${track.id}"></div>`;
-      }
-      bodyHTML += `</div>`;
-    } else if (track.type === 'chords') {
-      bodyHTML += `<div class="section-label">Chord Sequence (16 steps)</div>`;
-      bodyHTML += `<div class="step-grid">`;
-      for (let i = 0; i < 16; i++) {
-        const chord = track.chords[i];
-        const isRest = chord === '~';
-        bodyHTML += `<div class="step-cell ${!isRest ? 'on' : ''}"
-          style="${!isRest ? `background:${typeInfo.color};box-shadow:0 0 8px ${typeInfo.glow};font-size:9px;display:flex;align-items:center;justify-content:center;color:#000;font-weight:700;font-family:'JetBrains Mono',monospace` : 'display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--text-dim)'}"
-          data-chord-step="${i}" data-track="${track.id}">${chord}</div>`;
-      }
-      bodyHTML += `</div>`;
-    } else {
-      // Piano roll style note grid
-      const noteNames = ['7','6','5','4','3','2','1','0'];
-      bodyHTML += `<div class="section-label">Notes (scale degrees, 16 steps)</div>`;
-      bodyHTML += `<div class="piano-grid-container">`;
-      bodyHTML += `<div class="piano-labels">`;
-      for (const nn of noteNames) {
-        bodyHTML += `<div class="note-row-label">${nn}</div>`;
-      }
-      bodyHTML += `</div><div class="piano-grid">`;
-      for (const nn of noteNames) {
-        const noteVal = parseInt(nn);
-        bodyHTML += `<div class="piano-row">`;
-        for (let i = 0; i < 16; i++) {
-          const isOn = track.notes[i] === noteVal;
-          bodyHTML += `<div class="piano-cell ${isOn ? 'on' : ''}"
-            style="${isOn ? `background:${typeInfo.color};box-shadow:0 0 6px ${typeInfo.glow}` : ''}"
-            data-note="${noteVal}" data-col="${i}" data-track="${track.id}"></div>`;
-        }
-        bodyHTML += `</div>`;
-      }
-      bodyHTML += `</div></div>`;
-    }
 
     // Effects
     bodyHTML += `<div class="section-label">Effects</div>`;
@@ -353,8 +896,8 @@ function renderTracks() {
     bodyHTML += `<div class="section-label">Pattern Transforms</div>`;
     bodyHTML += `<div class="transform-chips">`;
     for (const t of TRANSFORMS) {
-      const isActive = track.transforms.includes(t.id);
-      bodyHTML += `<div class="transform-chip ${isActive ? 'active' : ''}"
+      const isOn = track.transforms.includes(t.id);
+      bodyHTML += `<div class="transform-chip ${isOn ? 'active' : ''}"
         data-transform="${t.id}" data-track="${track.id}"
         title="${t.desc}">${t.label}</div>`;
     }
@@ -364,18 +907,37 @@ function renderTracks() {
       <div class="track-header" data-track="${track.id}">
         <div class="track-color" style="background:${typeInfo.color}"></div>
         <div class="track-name">${track.name}</div>
-        <div class="track-pattern-preview">${getPatternPreview(track)}</div>
+        <div class="track-event-count">${track.events.length} events</div>
         <div class="track-controls-row">
           <div class="track-btn ${track.muted ? 'muted' : ''}" data-action="mute" data-track="${track.id}" title="Mute">
-            ${track.muted ? '🔇' : '🔊'}
+            ${track.muted ? '\u{1F507}' : '\u{1F50A}'}
           </div>
-          <div class="track-btn" data-action="delete" data-track="${track.id}" title="Delete">✕</div>
+          <div class="track-btn" data-action="delete" data-track="${track.id}" title="Delete">\u2715</div>
         </div>
       </div>
       <div class="track-body">${bodyHTML}</div>
     `;
 
     panel.insertBefore(card, addBtn);
+
+    // Initialize canvas after DOM insertion
+    if (isActive) {
+      requestAnimationFrame(() => {
+        const canvasEl = document.getElementById(`canvas-${track.id}`);
+        if (canvasEl) {
+          if (canvasInstances[track.id]) {
+            canvasInstances[track.id].canvas = canvasEl;
+            canvasInstances[track.id].ctx = canvasEl.getContext('2d');
+            canvasInstances[track.id].track = track;
+            canvasInstances[track.id]._resize();
+            canvasInstances[track.id]._bindEvents();
+            canvasInstances[track.id].draw();
+          } else {
+            canvasInstances[track.id] = new CanvasPianoRoll(canvasEl, track);
+          }
+        }
+      });
+    }
   }
 
   attachTrackEvents();
@@ -388,16 +950,6 @@ function renderSlider(param, label, value, min, max, step, trackId) {
       data-param="${param}" data-track="${trackId}">
     <div class="slider-value">${typeof value === 'number' ? (value > 100 ? Math.round(value) : value.toFixed(2)) : value}</div>
   </div>`;
-}
-
-function getPatternPreview(track) {
-  if (track.type === 'drums') {
-    return track.steps.map(s => s ? '●' : '·').join('');
-  } else if (track.type === 'chords') {
-    return track.chords.filter(c => c !== '~').join(' ');
-  } else {
-    return track.notes.map(n => n === -1 ? '·' : n).join(' ');
-  }
 }
 
 function attachTrackEvents() {
@@ -420,58 +972,6 @@ function attachTrackEvents() {
     });
   });
 
-  // Step cells (drums)
-  document.querySelectorAll('.step-cell[data-step]').forEach(el => {
-    el.addEventListener('click', () => {
-      const trackId = parseInt(el.dataset.track);
-      const step = parseInt(el.dataset.step);
-      const track = state.tracks.find(t => t.id === trackId);
-      if (track) {
-        track.steps[step] = track.steps[step] ? 0 : 1;
-        renderTracks();
-        updateCode();
-        if (state.playing) playCode();
-      }
-    });
-  });
-
-  // Chord cells
-  document.querySelectorAll('.step-cell[data-chord-step]').forEach(el => {
-    el.addEventListener('click', () => {
-      const trackId = parseInt(el.dataset.track);
-      const step = parseInt(el.dataset['chordStep']);
-      const track = state.tracks.find(t => t.id === trackId);
-      if (track) {
-        const currentIdx = AVAILABLE_CHORDS.indexOf(track.chords[step]);
-        track.chords[step] = AVAILABLE_CHORDS[(currentIdx + 1) % AVAILABLE_CHORDS.length];
-        renderTracks();
-        updateCode();
-        if (state.playing) playCode();
-      }
-    });
-  });
-
-  // Piano cells (notes)
-  document.querySelectorAll('.piano-cell').forEach(el => {
-    el.addEventListener('click', () => {
-      const trackId = parseInt(el.dataset.track);
-      const noteVal = parseInt(el.dataset.note);
-      const col = parseInt(el.dataset.col);
-      const track = state.tracks.find(t => t.id === trackId);
-      if (track) {
-        // Toggle: if this note is already on at this column, turn it off (rest)
-        if (track.notes[col] === noteVal) {
-          track.notes[col] = -1;
-        } else {
-          track.notes[col] = noteVal;
-        }
-        renderTracks();
-        updateCode();
-        if (state.playing) playCode();
-      }
-    });
-  });
-
   // Sound chips
   document.querySelectorAll('.sound-chip[data-sound]').forEach(el => {
     el.addEventListener('click', () => {
@@ -484,6 +984,21 @@ function attachTrackEvents() {
         updateCode();
         if (state.playing) playCode();
       }
+    });
+  });
+
+  // Grid resolution chips
+  document.querySelectorAll('.grid-res-chip').forEach(el => {
+    el.addEventListener('click', () => {
+      const trackId = parseInt(el.dataset.track);
+      const res = parseInt(el.dataset.res);
+      if (canvasInstances[trackId]) {
+        canvasInstances[trackId].gridRes = res;
+        canvasInstances[trackId].draw();
+      }
+      // Update active state visually
+      el.parentElement.querySelectorAll('.grid-res-chip').forEach(c => c.classList.remove('active'));
+      el.classList.add('active');
     });
   });
 
@@ -525,7 +1040,6 @@ function attachTrackEvents() {
 function updateCode() {
   const code = generateDisplayCode();
   const codeEl = document.getElementById('codeOutput');
-  // Simple syntax highlighting
   const highlighted = code
     .replace(/(".*?")/g, '<span class="string">$1</span>')
     .replace(/\b(\d+\.?\d*)\b/g, '<span class="number">$1</span>')
@@ -552,13 +1066,13 @@ const PRESETS = {
     state.scale = 'C:minor';
     document.getElementById('bpm').value = 85;
     document.getElementById('globalScale').value = 'C:minor';
-    const d = createTrack('drums', [1,0,0,0, 0,0,1,0, 0,0,1,0, 0,0,0,0]);
+    const d = createTrack('drums', stepsToEvents([1,0,0,0, 0,0,1,0, 0,0,1,0, 0,0,0,0], 'bd'));
     d.room = 0.3;
-    const b = createTrack('bass', [0,-1,0,-1, 3,-1,-1,-1, 0,-1,2,-1, 3,-1,-1,-1]);
+    const b = createTrack('bass', notesToEvents([0,-1,0,-1, 3,-1,-1,-1, 0,-1,2,-1, 3,-1,-1,-1], 'bass'));
     b.sound = 'triangle';
     b.lpf = 600;
     b.gain = 0.7;
-    const m = createTrack('melody', [4,-1,5,-1, 7,-1,-1,5, 4,-1,2,-1, 0,-1,-1,-1]);
+    const m = createTrack('melody', notesToEvents([4,-1,5,-1, 7,-1,-1,5, 4,-1,2,-1, 0,-1,-1,-1], 'melody'));
     m.sound = 'sine';
     m.room = 0.6;
     m.delay = 0.3;
@@ -573,13 +1087,16 @@ const PRESETS = {
     state.scale = 'A:minor';
     document.getElementById('bpm').value = 130;
     document.getElementById('globalScale').value = 'A:minor';
-    const bd = createTrack('drums', [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0]);
+    const bd = createTrack('drums', stepsToEvents([1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0], 'bd'));
     bd.sound = 'bd';
-    const hh = createTrack('drums', [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0]);
-    hh.sound = 'hh';
-    hh.name = 'Hi-Hat';
-    hh.gain = 0.5;
-    const b = createTrack('bass', [0,-1,-1,0, -1,-1,0,-1, -1,0,-1,-1, 0,-1,-1,-1]);
+    // Add hi-hat events to the same track on a different row
+    const hhRow = TRACK_TYPES.drums.rows.indexOf('hh');
+    for (let i = 0; i < 16; i++) {
+      if ([2,6,10,14].includes(i)) {
+        bd.events.push({ row: hhRow, start: i/16, duration: 1/16 });
+      }
+    }
+    const b = createTrack('bass', notesToEvents([0,-1,-1,0, -1,-1,0,-1, -1,0,-1,-1, 0,-1,-1,-1], 'bass'));
     b.sound = 'sawtooth';
     b.lpf = 800;
     b.transforms = ['every4fast2'];
@@ -593,13 +1110,13 @@ const PRESETS = {
     state.scale = 'D:dorian';
     document.getElementById('bpm').value = 70;
     document.getElementById('globalScale').value = 'D:dorian';
-    const m = createTrack('melody', [0,-1,-1,2, -1,-1,4,-1, -1,5,-1,-1, 7,-1,-1,-1]);
+    const m = createTrack('melody', notesToEvents([0,-1,-1,2, -1,-1,4,-1, -1,5,-1,-1, 7,-1,-1,-1], 'melody'));
     m.sound = 'sine';
     m.room = 1.5;
     m.delay = 0.5;
     m.lpf = 4000;
     m.transforms = ['juxrev', 'slow2'];
-    const c = createTrack('chords', ['Dm','~','~','~', 'Am','~','~','~', 'C','~','~','~', 'G','~','~','~']);
+    const c = createTrack('chords', chordsToEvents(['Dm','~','~','~', 'Am','~','~','~', 'C','~','~','~', 'G','~','~','~']));
     c.sound = 'sine';
     c.room = 1.8;
     c.gain = 0.4;
@@ -613,12 +1130,12 @@ const PRESETS = {
     state.scale = 'E:minor';
     document.getElementById('bpm').value = 110;
     document.getElementById('globalScale').value = 'E:minor';
-    const d = createTrack('drums', [1,0,0,1, 0,0,1,0, 0,1,1,0, 0,0,1,0]);
-    const b = createTrack('bass', [0,0,3,0, -1,0,2,0, 0,0,3,0, 5,-1,3,-1]);
+    const d = createTrack('drums', stepsToEvents([1,0,0,1, 0,0,1,0, 0,1,1,0, 0,0,1,0], 'bd'));
+    const b = createTrack('bass', notesToEvents([0,0,3,0, -1,0,2,0, 0,0,3,0, 5,-1,3,-1], 'bass'));
     b.sound = 'square';
     b.lpf = 1200;
     b.gain = 0.7;
-    const m = createTrack('melody', [4,5,7,-1, 5,4,-1,2, 0,-1,2,4, 5,-1,7,-1]);
+    const m = createTrack('melody', notesToEvents([4,5,7,-1, 5,4,-1,2, 0,-1,2,4, 5,-1,7,-1], 'melody'));
     m.sound = 'sawtooth';
     m.lpf = 5000;
     m.delay = 0.15;
@@ -634,17 +1151,35 @@ const PRESETS = {
 
 function shuffle() {
   for (const track of state.tracks) {
+    track.events = [];
+
     if (track.type === 'drums') {
-      track.steps = Array.from({length: 16}, () => Math.random() > 0.6 ? 1 : 0);
-      // Keep kick on beats
-      if (track.sound === 'bd') { track.steps[0] = 1; track.steps[8] = 1; }
+      for (let i = 0; i < 16; i++) {
+        if (Math.random() > 0.6) {
+          const row = Math.floor(Math.random() * 4); // bd, sd, hh, oh
+          track.events.push({ row, start: i/16, duration: 1/16 });
+        }
+      }
+      // Ensure kick on downbeats
+      if (!track.events.find(e => e.row === 0 && e.start === 0)) {
+        track.events.push({ row: 0, start: 0, duration: 1/16 });
+      }
+      if (!track.events.find(e => e.row === 0 && e.start === 0.5)) {
+        track.events.push({ row: 0, start: 0.5, duration: 1/16 });
+      }
     } else if (track.type === 'chords') {
-      const chords = ['Am','C','Dm','Em','F','G'];
-      track.chords = Array.from({length: 16}, (_, i) =>
-        i % 4 === 0 ? chords[Math.floor(Math.random() * chords.length)] : '~');
+      const chordRows = [10, 6, 4, 2, 0]; // Am, C, Dm, E, G
+      for (let i = 0; i < 4; i++) {
+        const row = chordRows[Math.floor(Math.random() * chordRows.length)];
+        track.events.push({ row, start: i * 0.25, duration: 0.25 });
+      }
     } else {
-      track.notes = Array.from({length: 16}, () =>
-        Math.random() > 0.4 ? Math.floor(Math.random() * 8) : -1);
+      for (let i = 0; i < 16; i++) {
+        if (Math.random() > 0.4) {
+          const row = Math.floor(Math.random() * 8);
+          track.events.push({ row, start: i/16, duration: 1/16 });
+        }
+      }
     }
   }
   renderTracks();
@@ -659,21 +1194,19 @@ function shuffle() {
 document.getElementById('playBtn').addEventListener('click', async () => {
   if (!state.playing) {
     const btn = document.getElementById('playBtn');
-
     if (!strudelInitialized) {
-      btn.innerHTML = '⏳ Loading...';
+      btn.innerHTML = '\u23F3 Loading...';
       btn.disabled = true;
       await strudelReady;
       btn.disabled = false;
     }
-
     state.playing = true;
-    btn.innerHTML = '■ Stop';
+    btn.innerHTML = '\u25A0 Stop';
     btn.classList.add('playing');
     await playCode();
   } else {
     state.playing = false;
-    document.getElementById('playBtn').innerHTML = '▶ Play';
+    document.getElementById('playBtn').innerHTML = '\u25B6 Play';
     document.getElementById('playBtn').classList.remove('playing');
     stopCode();
   }
@@ -694,7 +1227,6 @@ document.getElementById('globalScale').addEventListener('change', (e) => {
 document.getElementById('shuffleBtn').addEventListener('click', shuffle);
 
 document.getElementById('addTrackBtn').addEventListener('click', () => {
-  // Cycle through types
   const types = ['drums', 'bass', 'melody', 'chords'];
   const existingTypes = state.tracks.map(t => t.type);
   const next = types.find(t => !existingTypes.includes(t)) || types[0];
@@ -711,7 +1243,6 @@ document.getElementById('copyCode').addEventListener('click', () => {
   });
 });
 
-// Presets
 document.querySelectorAll('.preset-chip').forEach(el => {
   el.addEventListener('click', () => {
     document.querySelectorAll('.preset-chip').forEach(c => c.classList.remove('active'));
@@ -721,7 +1252,7 @@ document.querySelectorAll('.preset-chip').forEach(el => {
       if (state.playing) {
         stopCode();
         state.playing = false;
-        document.getElementById('playBtn').innerHTML = '▶ Play';
+        document.getElementById('playBtn').innerHTML = '\u25B6 Play';
         document.getElementById('playBtn').classList.remove('playing');
       }
       PRESETS[preset]();
@@ -729,16 +1260,24 @@ document.querySelectorAll('.preset-chip').forEach(el => {
   });
 });
 
+// Window resize: update canvases
+window.addEventListener('resize', () => {
+  for (const id of Object.keys(canvasInstances)) {
+    const inst = canvasInstances[id];
+    if (inst.canvas.parentElement) {
+      inst._resize();
+      inst.draw();
+    }
+  }
+});
+
 // ============================================================
 // INIT
 // ============================================================
 
 (function boot() {
-  // Start with empty preset
   PRESETS.empty();
   updateCode();
-
-  // Engine is already initializing at top level via strudelReady promise
   document.getElementById('loading').classList.add('hidden');
   console.log('Strudel Builder UI ready. Engine initializing in background...');
 })();
