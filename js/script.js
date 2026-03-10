@@ -174,7 +174,11 @@ async function playCode() {
   }
 
   const trackCodes = buildTrackCodes();
-  if (trackCodes.length === 0) return;
+  if (trackCodes.length === 0) {
+    // No active tracks - stop playback
+    try { hush(); } catch(e) {}
+    return;
+  }
 
   const cps = (state.bpm / 60 / 4).toFixed(3);
 
@@ -186,16 +190,13 @@ async function playCode() {
     patternExpr = `stack(\n${trackCodes.map(c => '  ' + c).join(',\n')}\n)`;
   }
 
-  // Stop any currently playing pattern
-  try { hush(); } catch(e) {}
-
-  // Play via global eval + .play() + .cps()
-  // This is the strategy confirmed working by diagnostics
+  // Use the global evaluate() for hot-swapping: replaces the pattern seamlessly
+  // without stopping the scheduler, so the music keeps flowing.
+  // evaluate() is exported by @strudel/web and internally calls repl.evaluate()
   try {
-    const playExpr = patternExpr + `.cps(${cps}).play()`;
-    const result = (0, eval)(playExpr);
-    if (result && result.then) await result;
-    console.log('Playing');
+    const code = patternExpr + `.cps(${cps})`;
+    await evaluate(code);
+    console.log('Pattern updated (hot-swap)');
   } catch(e) {
     console.error('Play error:', e);
   }
